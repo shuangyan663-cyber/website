@@ -1,0 +1,1449 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>星梦圣诞 · 3D手势交互粒子系统</title>
+
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- Google Font: Noto Sans SC & Inter -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Noto+Sans+SC:wght@300;400;500;600&display=swap" rel="stylesheet" />
+
+  <!-- Three.js & OrbitControls -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+
+  <!-- MediaPipe Hands -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+  <style>
+    * {
+      box-sizing: border-box;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      font-family: 'Noto Sans SC', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      /* 深邃星空渐变背景：深蓝紫到黑的梦幻夜空 */
+      background:
+        radial-gradient(ellipse at 50% 35%, rgba(46, 22, 74, 0.58) 0%, rgba(16, 11, 38, 0.85) 45%, rgba(5, 3, 14, 1) 100%),
+        linear-gradient(180deg, #070516 0%, #120926 50%, #04020a 100%);
+      color: #f8fafc;
+      user-select: none;
+    }
+
+    #canvas-container {
+      position: fixed;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 1;
+    }
+
+    #canvas-container canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+
+    /* 极简高级毛玻璃质感 */
+    .glass-panel {
+      background: rgba(15, 10, 30, 0.52);
+      backdrop-filter: blur(18px);
+      -webkit-backdrop-filter: blur(18px);
+      border: 1px solid rgba(255, 200, 221, 0.16);
+      box-shadow:
+        0 12px 40px rgba(0, 0, 0, 0.45),
+        inset 0 1px 0 rgba(255, 255, 255, 0.08);
+    }
+
+    /* 自定义滑块样式 */
+    input[type="range"].dream-slider {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 100%;
+      height: 6px;
+      border-radius: 999px;
+      background: linear-gradient(90deg, #ff1493 0%, #ffc8dd 50%, #ffd700 100%);
+      outline: none;
+      opacity: 0.9;
+      transition: opacity 0.2s ease;
+    }
+
+    input[type="range"].dream-slider:hover {
+      opacity: 1;
+    }
+
+    input[type="range"].dream-slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: #ffffff;
+      border: 2px solid #ff69b4;
+      box-shadow: 0 0 12px rgba(255, 105, 180, 0.85);
+      cursor: pointer;
+      transition: transform 0.15s ease, box-shadow 0.15s ease;
+    }
+
+    input[type="range"].dream-slider::-webkit-slider-thumb:hover {
+      transform: scale(1.15);
+      box-shadow: 0 0 18px rgba(255, 215, 0, 0.95);
+    }
+
+    input[type="range"].dream-slider::-moz-range-thumb {
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: #ffffff;
+      border: 2px solid #ff69b4;
+      box-shadow: 0 0 12px rgba(255, 105, 180, 0.85);
+      cursor: pointer;
+    }
+
+    /* 摄像头画布镜像 */
+    #hand-canvas {
+      transform: scaleX(-1);
+    }
+
+    /* 柔和呼吸灯 */
+    @keyframes pulseSoft {
+      0%, 100% { opacity: 0.65; transform: scale(1); }
+      50% { opacity: 1; transform: scale(1.15); }
+    }
+
+    .dot-pulse {
+      animation: pulseSoft 2.2s infinite ease-in-out;
+    }
+
+    /* 状态按钮激活态 */
+    .state-btn-active {
+      background: linear-gradient(135deg, rgba(255, 105, 180, 0.35), rgba(255, 215, 0, 0.25));
+      border-color: rgba(255, 182, 193, 0.65) !important;
+      color: #ffffff !important;
+      box-shadow: 0 0 14px rgba(255, 105, 180, 0.3);
+    }
+  </style>
+</head>
+<body>
+  <!-- 3D 渲染画布容器 -->
+  <div id="canvas-container"></div>
+
+  <!-- 隐藏的原生视频元素，供 MediaPipe Hands 读取帧 -->
+  <video id="input-video" playsinline muted class="hidden"></video>
+
+  <!-- 左上角：极简毛玻璃状态与控制面板 -->
+  <aside id="hud-panel" class="fixed top-4 left-4 z-20 w-[calc(100vw-2rem)] max-w-[310px] rounded-2xl glass-panel transition-all duration-300">
+    <!-- 面板头部 -->
+    <div class="flex items-center justify-between px-4 py-3 border-b border-white/10">
+      <div class="flex items-center gap-2.5">
+        <span class="inline-flex h-2.5 w-2.5 rounded-full bg-pink-400 shadow-[0_0_10px_#ff69b4] dot-pulse"></span>
+        <div>
+          <h1 class="text-sm font-medium tracking-wider text-pink-100">星梦圣诞 · 粒子交互</h1>
+          <p class="text-[11px] text-pink-200/60">3D 实时手势光影系统</p>
+        </div>
+      </div>
+      <button id="toggle-hud-btn" type="button" title="折叠/展开面板"
+        class="p-1.5 rounded-lg text-pink-200/70 hover:text-white hover:bg-white/10 transition-colors text-xs">
+        收起
+      </button>
+    </div>
+
+    <!-- 面板主体内容 -->
+    <div id="hud-body" class="p-4 space-y-4">
+      <!-- 当前形态状态指示 -->
+      <div class="flex items-center justify-between">
+        <span class="text-xs text-slate-300/80">当前形态</span>
+        <span id="state-badge"
+          class="px-2.5 py-0.5 rounded-full text-xs font-medium bg-pink-500/20 text-pink-200 border border-pink-300/30 transition-all duration-300">
+          圣诞树 · 梦幻形态
+        </span>
+      </div>
+
+      <!-- 实时手掌开合度进度条 -->
+      <div class="space-y-1.5">
+        <div class="flex items-center justify-between text-xs">
+          <span class="text-slate-300/80">手掌开合度</span>
+          <span id="openness-value" class="font-mono text-pink-200">50%</span>
+        </div>
+        <div class="relative w-full h-2 rounded-full bg-white/10 overflow-hidden">
+          <div id="openness-bar"
+            class="h-full rounded-full transition-all duration-75"
+            style="width: 50%; background: linear-gradient(90deg, #ff1493, #ffb6c1, #ffd700); box-shadow: 0 0 10px rgba(255, 182, 193, 0.7);">
+          </div>
+          <!-- 中间圣诞树默认基准刻度 -->
+          <div class="absolute top-0 bottom-0 left-1/2 w-[1.5px] bg-white/50 -translate-x-1/2 pointer-events-none"></div>
+        </div>
+        <div class="flex justify-between text-[10px] text-slate-400/80 px-0.5">
+          <span>握拳 · 凝聚</span>
+          <span>自然 · 圣诞树</span>
+          <span>张手 · 爆炸</span>
+        </div>
+      </div>
+
+      <!-- 摄像头手势控制按钮 -->
+      <button id="camera-btn" type="button"
+        class="w-full py-2.5 px-4 rounded-xl text-xs font-medium tracking-wide text-white flex items-center justify-center gap-2 transition-all duration-200 cursor-pointer border border-pink-300/35 bg-gradient-to-r from-pink-500/40 via-fuchsia-500/35 to-amber-400/30 hover:from-pink-500/60 hover:to-amber-400/45 shadow-[0_4px_20px_rgba(255,105,180,0.25)] active:scale-[0.98]">
+        <svg id="camera-icon" class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 10.5l4.72-4.72a.75.75 0 011.28.53v11.38a.75.75 0 01-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 002.25-2.25v-9a2.25 2.25 0 00-2.25-2.25h-9A2.25 2.25 0 002.25 7.5v9a2.25 2.25 0 002.25 2.25z" />
+        </svg>
+        <span id="camera-btn-text">开启手势控制</span>
+      </button>
+
+      <!-- 手动调试区 -->
+      <div class="pt-3 border-t border-white/10 space-y-3">
+        <div class="flex items-center justify-between">
+          <span class="text-xs text-slate-300/80">手动模拟开合度</span>
+          <span id="control-mode-tag" class="text-[10px] px-2 py-0.5 rounded-md bg-white/10 text-pink-200/80">手动模式</span>
+        </div>
+
+        <input id="manual-slider" type="range" min="0" max="100" value="50" step="0.5" class="dream-slider" />
+
+        <!-- 快捷状态切换按钮 -->
+        <div class="grid grid-cols-3 gap-2">
+          <button id="btn-condense" type="button"
+            class="py-2 rounded-xl text-xs text-pink-100/85 bg-white/5 hover:bg-white/15 border border-white/10 transition-all cursor-pointer active:scale-95">
+            凝聚
+          </button>
+          <button id="btn-tree" type="button"
+            class="py-2 rounded-xl text-xs text-pink-100/85 bg-white/5 hover:bg-white/15 border border-white/10 transition-all cursor-pointer active:scale-95 state-btn-active">
+            圣诞树
+          </button>
+          <button id="btn-explode" type="button"
+            class="py-2 rounded-xl text-xs text-pink-100/85 bg-white/5 hover:bg-white/15 border border-white/10 transition-all cursor-pointer active:scale-95">
+            爆炸
+          </button>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- 右下角：半透明手势摄像头预览窗（带骨骼关键点绘制，可折叠） -->
+  <section id="camera-preview-box"
+    class="fixed bottom-4 right-4 z-20 hidden w-48 sm:w-56 rounded-2xl glass-panel overflow-hidden transition-all duration-300">
+    <div class="flex items-center justify-between px-3 py-2 border-b border-white/10">
+      <div class="flex items-center gap-1.5">
+        <span id="hand-detect-dot" class="w-2 h-2 rounded-full bg-amber-300/70"></span>
+        <span id="hand-detect-text" class="text-[11px] text-pink-100/90">等待识别手部...</span>
+      </div>
+      <button id="toggle-preview-btn" type="button"
+        class="text-[11px] text-pink-200/75 hover:text-white px-1.5 py-0.5 rounded hover:bg-white/10 transition-colors">
+        隐藏画面
+      </button>
+    </div>
+    <div id="preview-canvas-wrap" class="relative w-full aspect-[4/3] bg-black/50">
+      <canvas id="hand-canvas" class="w-full h-full object-cover block"></canvas>
+    </div>
+  </section>
+
+  <!-- 左下角：极简操作提示 -->
+  <div class="fixed bottom-4 left-4 z-10 hidden sm:flex items-center gap-2 px-3.5 py-2 rounded-full glass-panel text-[11px] text-pink-100/70 pointer-events-none">
+    <span>鼠标拖拽旋转</span>
+    <span class="text-pink-300/40">•</span>
+    <span>滚轮缩放视角</span>
+    <span class="text-pink-300/40">•</span>
+    <span>握拳凝聚 / 张手爆炸</span>
+  </div>
+
+  <!-- 非阻塞消息提示框（替代 alert） -->
+  <div id="toast-box"
+    class="fixed top-4 left-1/2 -translate-x-1/2 z-30 pointer-events-none opacity-0 -translate-y-2 transition-all duration-300 max-w-[90vw]">
+    <div id="toast-content"
+      class="px-4 py-2.5 rounded-xl glass-panel text-xs text-pink-100 border border-pink-300/35 shadow-lg text-center">
+    </div>
+  </div>
+
+  <script>
+    /**
+     * ============================================================================
+     * 星梦圣诞 · 实时交互 3D 粒子系统
+     * 技术栈：Three.js (Custom ShaderMaterial) + OrbitControls + MediaPipe Hands
+     * ============================================================================
+     */
+
+    // 全局核心状态管理
+    const AppState = {
+      // 目标开合度 [0.0 ~ 1.0]：0=握拳凝聚，0.5=圣诞树默认，1.0=张手爆炸
+      targetOpenness: 0.5,
+      // 平滑插值后的当前开合度，用于驱动着色器
+      currentOpenness: 0.5,
+      // 摄像头是否已开启
+      cameraActive: false,
+      // 当前是否检测到手部
+      handDetected: false,
+      // 上次检测到手部的时间戳
+      lastHandTime: 0,
+      // 手势识别模式还是手动覆盖模式
+      isManualOverride: false,
+      // 预览窗是否折叠
+      previewCollapsed: false,
+      // HUD 是否折叠
+      hudCollapsed: false
+    };
+
+    // Three.js 核心对象
+    let scene, camera, renderer, controls, clock;
+    let mainParticleSystem, mainMaterial;
+    let bgStarSystem, bgStarMaterial;
+    let nebulaSystem;
+
+    // MediaPipe & 摄像头相关对象
+    let handsInstance = null;
+    let mediaStream = null;
+    let isProcessingFrame = false;
+
+    // DOM 元素引用
+    const dom = {};
+
+    /**
+     * 显示优雅的非阻塞提示消息
+     */
+    let toastTimer = null;
+    function showToast(message, duration = 3400) {
+      dom.toastContent.textContent = message;
+      dom.toastBox.classList.remove('opacity-0', '-translate-y-2');
+      dom.toastBox.classList.add('opacity-100', 'translate-y-0');
+
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => {
+        dom.toastBox.classList.remove('opacity-100', 'translate-y-0');
+        dom.toastBox.classList.add('opacity-0', '-translate-y-2');
+      }, duration);
+    }
+
+    /**
+     * ============================================================================
+     * 1. 初始化 Three.js 场景、相机、渲染器与控制器
+     * ============================================================================
+     */
+    function initThree() {
+      const container = document.getElementById('canvas-container');
+      scene = new THREE.Scene();
+
+      // 透视相机，视角舒展，完整展示高挑优雅的圣诞树
+      camera = new THREE.PerspectiveCamera(
+        48,
+        window.innerWidth / window.innerHeight,
+        0.1,
+        300
+      );
+      camera.position.set(0, 2.2, 29);
+
+      // 透明背景渲染器，让 CSS 深蓝紫星空渐变透出
+      renderer = new THREE.WebGLRenderer({
+        antialias: true,
+        alpha: true,
+        powerPreference: 'high-performance'
+      });
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.setClearColor(0x000000, 0);
+      container.appendChild(renderer.domElement);
+
+      // OrbitControls 鼠标拖拽旋转与滚轮缩放
+      controls = new THREE.OrbitControls(camera, renderer.domElement);
+      controls.enableDamping = true;
+      controls.dampingFactor = 0.055;
+      controls.enablePan = false;
+      controls.minDistance = 12;
+      controls.maxDistance = 58;
+      controls.maxPolarAngle = Math.PI * 0.78;
+      controls.minPolarAngle = Math.PI * 0.15;
+      controls.target.set(0, 0.5, 0);
+
+      clock = new THREE.Clock();
+
+      // 构建星空背景、星云氛围与主圣诞树粒子系统
+      createBackgroundStars();
+      createNebulaGlow();
+      createMainParticleSystem();
+
+      window.addEventListener('resize', onWindowResize);
+    }
+
+    /**
+     * ============================================================================
+     * 2. 构建深邃多层闪烁星空背景
+     * ============================================================================
+     */
+    function createBackgroundStars() {
+      const starCount = 1800;
+      const positions = new Float32Array(starCount * 3);
+      const colors = new Float32Array(starCount * 3);
+      const sizes = new Float32Array(starCount);
+      const phases = new Float32Array(starCount);
+
+      const starPalette = [
+        new THREE.Color('#ffffff'),
+        new THREE.Color('#dbeafe'), // 冰蓝星辰
+        new THREE.Color('#f3e8ff'), // 淡紫星辰
+        new THREE.Color('#ffe4e6'), // 浅粉星辰
+        new THREE.Color('#fef3c7')  // 暖金星辰
+      ];
+
+      for (let i = 0; i < starCount; i++) {
+        // 分布在远景球壳（半径 55 ~ 155）
+        const r = 55 + Math.random() * 100;
+        const theta = Math.random() * Math.PI * 2;
+        const phi = Math.acos(2 * Math.random() - 1);
+
+        positions[i * 3] = r * Math.sin(phi) * Math.cos(theta);
+        positions[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta);
+        positions[i * 3 + 2] = r * Math.cos(phi);
+
+        const col = starPalette[Math.floor(Math.random() * starPalette.length)];
+        const dim = 0.45 + Math.random() * 0.55;
+        colors[i * 3] = col.r * dim;
+        colors[i * 3 + 1] = col.g * dim;
+        colors[i * 3 + 2] = col.b * dim;
+
+        sizes[i] = 1.2 + Math.pow(Math.random(), 2.2) * 3.8;
+        phases[i] = Math.random() * Math.PI * 2;
+      }
+
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      geo.setAttribute('aColor', new THREE.BufferAttribute(colors, 3));
+      geo.setAttribute('aSize', new THREE.BufferAttribute(sizes, 1));
+      geo.setAttribute('aPhase', new THREE.BufferAttribute(phases, 1));
+
+      bgStarMaterial = new THREE.ShaderMaterial({
+        uniforms: {
+          uTime: { value: 0 },
+          uPixelRatio: { value: Math.min(window.devicePixelRatio, 2) }
+        },
+        vertexShader: `
+          attribute vec3 aColor;
+          attribute float aSize;
+          attribute float aPhase;
+          uniform float uTime;
+          uniform float uPixelRatio;
+          varying vec3 vColor;
+          varying float vAlpha;
+
+          void main() {
+            vColor = aColor;
+            float twinkle = 0.55 + 0.45 * sin(uTime * (0.9 + fract(aPhase) * 1.4) + aPhase * 6.2831);
+            vAlpha = twinkle;
+
+            vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+            gl_Position = projectionMatrix * mvPosition;
+            gl_PointSize = aSize * uPixelRatio * (120.0 / -mvPosition.z);
+          }
+        `,
+        fragmentShader: `
+          varying vec3 vColor;
+          varying float vAlpha;
+
+          void main() {
+            vec2 uv = gl_PointCoord - 0.5;
+            float d = length(uv);
+            if (d > 0.5) discard;
+            float glow = exp(-d * d * 18.0);
+            gl_FragColor = vec4(vColor, glow * vAlpha * 0.85);
+          }
+        `,
+        transparent: true,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending
+      });
+
+      bgStarSystem = new THREE.Points(geo, bgStarMaterial);
+      scene.add(bgStarSystem);
+    }
+
+    /**
+     * 构建远景微弱星云光晕氛围
+     */
+    function createNebulaGlow() {
+      const count = 24;
+      const positions = new Float32Array(count * 3);
+      const colors = new Float32Array(count * 3);
+      const sizes = new Float32Array(count);
+
+      const nebulaPalette = [
+        new THREE.Color('#3b1764'),
+        new THREE.Color('#1e1b4b'),
+        new THREE.Color('#581c5c'),
+        new THREE.Color('#2e1065')
+      ];
+
+      for (let i = 0; i < count; i++) {
+        const angle = (i / count) * Math.PI * 2 + Math.random() * 0.4;
+        const r = 45 + Math.random() * 35;
+        positions[i * 3] = Math.cos(angle) * r;
+        positions[i * 3 + 1] = (Math.random() - 0.5) * 40;
+        positions[i * 3 + 2] = Math.sin(angle) * r - 18;
+
+        const c = nebulaPalette[i % nebulaPalette.length];
+        colors[i * 3] = c.r;
+        colors[i * 3 + 1] = c.g;
+        colors[i * 3 + 2] = c.b;
+
+        sizes[i] = 90 + Math.random() * 90;
+      }
+
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      geo.setAttribute('aColor', new THREE.BufferAttribute(colors, 3));
+      geo.setAttribute('aSize', new THREE.BufferAttribute(sizes, 1));
+
+      const mat = new THREE.ShaderMaterial({
+        uniforms: {
+          uPixelRatio: { value: Math.min(window.devicePixelRatio, 2) }
+        },
+        vertexShader: `
+          attribute vec3 aColor;
+          attribute float aSize;
+          uniform float uPixelRatio;
+          varying vec3 vColor;
+          void main() {
+            vColor = aColor;
+            vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+            gl_Position = projectionMatrix * mvPosition;
+            gl_PointSize = aSize * uPixelRatio * (180.0 / -mvPosition.z);
+          }
+        `,
+        fragmentShader: `
+          varying vec3 vColor;
+          void main() {
+            vec2 uv = gl_PointCoord - 0.5;
+            float d = length(uv);
+            if (d > 0.5) discard;
+            float alpha = pow(1.0 - d * 2.0, 2.6) * 0.14;
+            gl_FragColor = vec4(vColor, alpha);
+          }
+        `,
+        transparent: true,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending
+      });
+
+      nebulaSystem = new THREE.Points(geo, mat);
+      scene.add(nebulaSystem);
+    }
+
+    /**
+     * ============================================================================
+     * 3. 构建主 3D 粒子系统（圣诞树默认形态 + 凝聚形态 + 爆炸形态）
+     * ============================================================================
+     */
+    function createMainParticleSystem() {
+      const particles = [];
+
+      // 调色板定义
+      const pinkPalette = [
+        new THREE.Color('#FFB6C1'),
+        new THREE.Color('#FFC8DD'),
+        new THREE.Color('#FFE5EC')
+      ];
+      const goldPalette = [
+        new THREE.Color('#FFD700'),
+        new THREE.Color('#FFF099'),
+        new THREE.Color('#FFE066')
+      ];
+      const starPalette = [
+        new THREE.Color('#FF1493'),
+        new THREE.Color('#FF69B4'),
+        new THREE.Color('#FFA6D5')
+      ];
+
+      const treeBottomY = -9.2;
+      const treeHeight = 18.4; // y: -9.2 ~ +9.2
+      const baseRadius = 6.6;
+
+      /**
+       * 辅助函数：生成单个粒子的三态数据
+       * @param {THREE.Vector3} treePos 圣诞树目标位置
+       * @param {THREE.Color} color 粒子基础色
+       * @param {number} size 粒子尺寸
+       * @param {number} type 0=树身淡粉, 1=金黄装饰, 2=顶部亮粉五角星, 3=环绕星尘
+       */
+      function pushParticle(treePos, color, size, type) {
+        // 1) 凝聚态位置：向中心高能聚集，形成致密能量核心（带层状球体分布）
+        const u = Math.random();
+        const v = Math.random();
+        const cTheta = u * Math.PI * 2;
+        const cPhi = Math.acos(2 * v - 1);
+        // 核心中心更密集，外缘略柔和
+        const coreRadius = (type === 2 ? 0.35 : 0.25) + Math.pow(Math.random(), 1.85) * 2.35;
+        const condensePos = new THREE.Vector3(
+          coreRadius * Math.sin(cPhi) * Math.cos(cTheta),
+          coreRadius * Math.sin(cPhi) * Math.sin(cTheta) + 0.4,
+          coreRadius * Math.cos(cPhi)
+        );
+
+        // 2) 爆炸态位置：三维混乱发散，带有远近层次感
+        const eTheta = Math.random() * Math.PI * 2;
+        const ePhi = Math.acos(2 * Math.random() - 1);
+        const explodeRadius = 15.0 + Math.pow(Math.random(), 0.75) * 26.0;
+        const explodePos = new THREE.Vector3(
+          explodeRadius * Math.sin(ePhi) * Math.cos(eTheta),
+          explodeRadius * Math.sin(ePhi) * Math.sin(eTheta) + (Math.random() - 0.5) * 6.0,
+          explodeRadius * Math.cos(ePhi)
+        );
+
+        particles.push({
+          treePos,
+          condensePos,
+          explodePos,
+          color,
+          size,
+          type,
+          phase: Math.random() * Math.PI * 2,
+          seed: Math.random()
+        });
+      }
+
+      // ------------------------------------------------------------------
+      // A. 圣诞树主体：5条优雅清晰的主螺旋线条（淡粉色系，疏密有致、不拥挤）
+      // ------------------------------------------------------------------
+      const spiralArms = 5;
+      const pointsPerArm = 520;
+      const spiralTurns = 3.8;
+
+      for (let arm = 0; arm < spiralArms; arm++) {
+        const armOffset = (arm / spiralArms) * Math.PI * 2;
+        for (let i = 0; i < pointsPerArm; i++) {
+          // t 从 0（底部）到 1（树顶），底部略疏、中上部流畅收拢
+          const t = Math.pow(i / (pointsPerArm - 1), 0.92);
+          const y = treeBottomY + t * treeHeight;
+
+          // 柔和微凹的优雅圆锥曲线 + 枝干层次起伏
+          const tierWave = 1.0 + 0.085 * Math.sin(t * Math.PI * 14.0);
+          const radius = baseRadius * Math.pow(1.0 - t, 1.08) * tierWave;
+          const angle = armOffset + t * Math.PI * 2 * spiralTurns;
+
+          // 极轻微的丝带宽度抖动，保持线条流畅分明
+          const jitterR = (Math.random() - 0.5) * 0.22 * (1.0 - t * 0.6);
+          const jitterY = (Math.random() - 0.5) * 0.16;
+
+          const x = Math.cos(angle) * (radius + jitterR);
+          const z = Math.sin(angle) * (radius + jitterR);
+
+          // 越靠近顶部颜色略微偏浅亮粉
+          const col = pinkPalette[Math.floor(Math.random() * pinkPalette.length)].clone();
+          col.lerp(new THREE.Color('#FFF0F5'), t * 0.25);
+
+          const size = (2.1 + Math.random() * 1.45) * (1.05 - t * 0.2);
+          pushParticle(new THREE.Vector3(x, y + jitterY, z), col, size, 0);
+        }
+      }
+
+      // ------------------------------------------------------------------
+      // B. 圣诞树层次感波浪轮廓环（7层枝干轮廓线，增强结构感且通透）
+      // ------------------------------------------------------------------
+      const tierCount = 7;
+      for (let tier = 0; tier < tierCount; tier++) {
+        const t = 0.06 + (tier / tierCount) * 0.82;
+        const yBase = treeBottomY + t * treeHeight;
+        const rBase = baseRadius * Math.pow(1.0 - t, 1.08) * 1.04;
+        const ringPoints = Math.floor(155 * (1.0 - t * 0.55));
+        const scallops = 7; // 枝叶波浪瓣数
+
+        for (let j = 0; j < ringPoints; j++) {
+          const angle = (j / ringPoints) * Math.PI * 2 + tier * 0.45;
+          const wave = Math.sin(angle * scallops);
+          const r = rBase * (1.0 + 0.09 * wave) + (Math.random() - 0.5) * 0.12;
+          // 枝梢微微下垂，更具自然树形美感
+          const droop = -0.22 * Math.max(0, wave) * (1.0 - t * 0.5);
+
+          const x = Math.cos(angle) * r;
+          const z = Math.sin(angle) * r;
+          const y = yBase + droop + (Math.random() - 0.5) * 0.12;
+
+          const col = pinkPalette[(tier + j) % pinkPalette.length].clone();
+          const size = 1.9 + Math.random() * 1.3;
+          pushParticle(new THREE.Vector3(x, y, z), col, size, 0);
+        }
+      }
+
+      // ------------------------------------------------------------------
+      // C. 金黄色发光装饰粒子（点缀于树身螺旋与枝干节点，柔和闪烁）
+      // ------------------------------------------------------------------
+      const goldSpiralCount = 340;
+      for (let i = 0; i < goldSpiralCount; i++) {
+        const t = 0.03 + Math.pow(Math.random(), 0.92) * 0.91;
+        const y = treeBottomY + t * treeHeight;
+        const arm = Math.floor(Math.random() * spiralArms);
+        const armOffset = (arm / spiralArms) * Math.PI * 2;
+        const angle = armOffset + t * Math.PI * 2 * spiralTurns + (Math.random() - 0.5) * 0.35;
+
+        const tierWave = 1.0 + 0.085 * Math.sin(t * Math.PI * 14.0);
+        // 略微浮于树身轮廓外侧，宛如精致挂饰
+        const r = baseRadius * Math.pow(1.0 - t, 1.08) * tierWave + 0.18 + Math.random() * 0.2;
+
+        const x = Math.cos(angle) * r;
+        const z = Math.sin(angle) * r;
+
+        const col = goldPalette[Math.floor(Math.random() * goldPalette.length)].clone();
+        const size = 3.6 + Math.random() * 2.8;
+        pushParticle(new THREE.Vector3(x, y, z), col, size, 1);
+      }
+
+      // 枝干节点金色小灯珠
+      for (let tier = 0; tier < tierCount; tier++) {
+        const t = 0.06 + (tier / tierCount) * 0.82;
+        const yBase = treeBottomY + t * treeHeight;
+        const rBase = baseRadius * Math.pow(1.0 - t, 1.08) * 1.13;
+        const scallops = 7;
+
+        for (let s = 0; s < scallops; s++) {
+          const peakAngle = ((s + 0.25) / scallops) * Math.PI * 2 + tier * 0.45;
+          const x = Math.cos(peakAngle) * rBase;
+          const z = Math.sin(peakAngle) * rBase;
+          const y = yBase - 0.22 * (1.0 - t * 0.5);
+
+          const col = goldPalette[s % goldPalette.length].clone();
+          pushParticle(new THREE.Vector3(x, y, z), col, 5.2 + Math.random() * 1.8, 1);
+        }
+      }
+
+      // ------------------------------------------------------------------
+      // D. 顶部亮粉色立体五角星（轮廓清晰、立体感强、光晕呼吸）
+      // ------------------------------------------------------------------
+      const starCenterY = treeBottomY + treeHeight + 1.25;
+      const outerR = 1.68;
+      const innerR = 0.68;
+      const starDepth = 0.48;
+
+      // 构造 10 个五角星外/内顶点 + 前后 2 个立体中心顶点
+      const starRingVerts = [];
+      for (let k = 0; k < 10; k++) {
+        // 让第一个尖角竖直朝上（PI / 2）
+        const a = Math.PI / 2 + (k * Math.PI) / 5;
+        const r = k % 2 === 0 ? outerR : innerR;
+        starRingVerts.push(new THREE.Vector3(Math.cos(a) * r, starCenterY + Math.sin(a) * r, 0));
+      }
+      const frontApex = new THREE.Vector3(0, starCenterY, starDepth);
+      const backApex = new THREE.Vector3(0, starCenterY, -starDepth);
+
+      // 1) 沿着五角星 10 条外轮廓边采样
+      for (let k = 0; k < 10; k++) {
+        const pA = starRingVerts[k];
+        const pB = starRingVerts[(k + 1) % 10];
+        const segSteps = 18;
+        for (let s = 0; s < segSteps; s++) {
+          const frac = s / segSteps;
+          const pos = new THREE.Vector3().lerpVectors(pA, pB, frac);
+          pos.x += (Math.random() - 0.5) * 0.04;
+          pos.y += (Math.random() - 0.5) * 0.04;
+          pos.z += (Math.random() - 0.5) * 0.05;
+
+          const col = starPalette[s % 2 === 0 ? 0 : 1].clone();
+          pushParticle(pos, col, 3.3 + Math.random() * 1.4, 2);
+        }
+      }
+
+      // 2) 沿着前后立体脊线采样（每个顶点连接到前后中心 apex，凸显 3D 棱面）
+      for (let k = 0; k < 10; k++) {
+        const pV = starRingVerts[k];
+        const ridgeSteps = k % 2 === 0 ? 12 : 7;
+        for (let s = 1; s < ridgeSteps; s++) {
+          const frac = s / ridgeSteps;
+          const posF = new THREE.Vector3().lerpVectors(pV, frontApex, frac);
+          const posB = new THREE.Vector3().lerpVectors(pV, backApex, frac);
+
+          const colF = new THREE.Color('#FF1493').lerp(new THREE.Color('#FFB6D9'), frac * 0.6);
+          const colB = new THREE.Color('#FF69B4').lerp(new THREE.Color('#FFB6D9'), frac * 0.5);
+
+          pushParticle(posF, colF, 2.8 + Math.random() * 1.2, 2);
+          pushParticle(posB, colB, 2.8 + Math.random() * 1.2, 2);
+        }
+      }
+
+      // 3) 五角星中心高亮核心与柔和呼吸光晕
+      for (let i = 0; i < 90; i++) {
+        const r = Math.pow(Math.random(), 1.5) * 1.85;
+        const theta = Math.random() * Math.PI * 2;
+        const phi = Math.acos(2 * Math.random() - 1);
+        const pos = new THREE.Vector3(
+          r * Math.sin(phi) * Math.cos(theta),
+          starCenterY + r * Math.sin(phi) * Math.sin(theta),
+          r * Math.cos(phi) * 0.65
+        );
+        const col = i < 30 ? new THREE.Color('#FFF0F8') : starPalette[Math.floor(Math.random() * starPalette.length)].clone();
+        pushParticle(pos, col, i < 30 ? 5.0 + Math.random() * 2.5 : 2.2 + Math.random() * 2.0, 2);
+      }
+
+      // ------------------------------------------------------------------
+      // E. 树底微光星环 & 环绕漂浮星尘（营造梦幻空气感）
+      // ------------------------------------------------------------------
+      for (let i = 0; i < 240; i++) {
+        const angle = Math.random() * Math.PI * 2;
+        const isBaseRing = i < 130;
+        let x, y, z, col, size;
+
+        if (isBaseRing) {
+          const r = 3.2 + Math.random() * 5.2;
+          x = Math.cos(angle) * r;
+          z = Math.sin(angle) * r;
+          y = treeBottomY - 0.35 + (Math.random() - 0.5) * 0.35;
+          col = (Math.random() > 0.35 ? pinkPalette[2] : goldPalette[1]).clone();
+          size = 1.6 + Math.random() * 1.8;
+        } else {
+          const t = Math.random();
+          const r = baseRadius * (1.0 - t * 0.72) + 1.2 + Math.random() * 3.8;
+          x = Math.cos(angle) * r;
+          z = Math.sin(angle) * r;
+          y = treeBottomY + t * (treeHeight + 2.5);
+          col = (Math.random() > 0.45 ? pinkPalette[1] : goldPalette[0]).clone();
+          size = 1.8 + Math.random() * 2.0;
+        }
+
+        pushParticle(new THREE.Vector3(x, y, z), col, size, 3);
+      }
+
+      // ------------------------------------------------------------------
+      // 组装 BufferGeometry 属性数组
+      // ------------------------------------------------------------------
+      const total = particles.length;
+      const treePositions = new Float32Array(total * 3);
+      const condensePositions = new Float32Array(total * 3);
+      const explodePositions = new Float32Array(total * 3);
+      const colors = new Float32Array(total * 3);
+      const sizes = new Float32Array(total);
+      const phases = new Float32Array(total);
+      const types = new Float32Array(total);
+      const seeds = new Float32Array(total);
+
+      for (let i = 0; i < total; i++) {
+        const p = particles[i];
+        treePositions[i * 3] = p.treePos.x;
+        treePositions[i * 3 + 1] = p.treePos.y;
+        treePositions[i * 3 + 2] = p.treePos.z;
+
+        condensePositions[i * 3] = p.condensePos.x;
+        condensePositions[i * 3 + 1] = p.condensePos.y;
+        condensePositions[i * 3 + 2] = p.condensePos.z;
+
+        explodePositions[i * 3] = p.explodePos.x;
+        explodePositions[i * 3 + 1] = p.explodePos.y;
+        explodePositions[i * 3 + 2] = p.explodePos.z;
+
+        colors[i * 3] = p.color.r;
+        colors[i * 3 + 1] = p.color.g;
+        colors[i * 3 + 2] = p.color.b;
+
+        sizes[i] = p.size;
+        phases[i] = p.phase;
+        types[i] = p.type;
+        seeds[i] = p.seed;
+      }
+
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute('position', new THREE.BufferAttribute(treePositions, 3));
+      geometry.setAttribute('aCondensePos', new THREE.BufferAttribute(condensePositions, 3));
+      geometry.setAttribute('aExplodePos', new THREE.BufferAttribute(explodePositions, 3));
+      geometry.setAttribute('aColor', new THREE.BufferAttribute(colors, 3));
+      geometry.setAttribute('aSize', new THREE.BufferAttribute(sizes, 1));
+      geometry.setAttribute('aPhase', new THREE.BufferAttribute(phases, 1));
+      geometry.setAttribute('aType', new THREE.BufferAttribute(types, 1));
+      geometry.setAttribute('aSeed', new THREE.BufferAttribute(seeds, 1));
+
+      // ------------------------------------------------------------------
+      // 自定义发光星芒着色器材质（AdditiveBlending）
+      // ------------------------------------------------------------------
+      mainMaterial = new THREE.ShaderMaterial({
+        uniforms: {
+          uTime: { value: 0 },
+          uCondense: { value: 0 }, // [0 ~ 1] 凝聚权重
+          uExplode: { value: 0 },  // [0 ~ 1] 爆炸权重
+          uPixelRatio: { value: Math.min(window.devicePixelRatio, 2) }
+        },
+        vertexShader: `
+          attribute vec3 aCondensePos;
+          attribute vec3 aExplodePos;
+          attribute vec3 aColor;
+          attribute float aSize;
+          attribute float aPhase;
+          attribute float aType;
+          attribute float aSeed;
+
+          uniform float uTime;
+          uniform float uCondense;
+          uniform float uExplode;
+          uniform float uPixelRatio;
+
+          varying vec3 vColor;
+          varying float vAlpha;
+          varying float vType;
+          varying float vSparkle;
+
+          // 绕 Y 轴旋转辅助函数
+          vec3 rotateY(vec3 v, float angle) {
+            float c = cos(angle);
+            float s = sin(angle);
+            return vec3(v.x * c - v.z * s, v.y, v.x * s + v.z * c);
+          }
+
+          void main() {
+            // 1. 圣诞树默认位置 + 细微呼吸漂浮
+            vec3 posTree = position;
+            if (aType > 2.5) {
+              // 环绕星尘轻轻上下浮动
+              posTree.y += sin(uTime * 0.9 + aPhase) * 0.35;
+              posTree = rotateY(posTree, uTime * 0.08 * (0.5 + aSeed));
+            } else {
+              // 树身与装饰的微弱星光微颤
+              posTree.y += sin(uTime * 1.4 + aPhase) * 0.04;
+            }
+
+            // 2. 凝聚态：高能脉动核心 + 向心旋转涡流
+            vec3 posCondense = aCondensePos;
+            float coreDist = length(posCondense);
+            // 越靠近中心转速越快的能量涡流
+            float vortexAngle = uTime * (2.6 + (2.8 / (coreDist + 0.55))) * (0.4 + 0.6 * uCondense);
+            posCondense = rotateY(posCondense, vortexAngle);
+            // 能量核心高能脉动呼吸
+            float energyPulse = 1.0 + 0.14 * sin(uTime * 4.5 - coreDist * 1.8) * uCondense;
+            posCondense *= energyPulse;
+
+            // 3. 爆炸态：向外混乱发散 + 梦幻星尘三维漂浮
+            vec3 posExplode = aExplodePos;
+            vec3 drift = vec3(
+              sin(uTime * (0.65 + aSeed * 0.7) + aPhase * 2.1),
+              cos(uTime * (0.55 + aSeed * 0.6) + aPhase * 1.7),
+              sin(uTime * (0.7 + aSeed * 0.5) + aPhase * 3.1)
+            ) * (1.25 * uExplode);
+            posExplode += drift;
+
+            // 4. 在圣诞树、凝聚、爆炸三态之间连续平滑插值
+            vec3 finalPos = posTree;
+
+            // 向凝聚态过渡时附加柔和螺旋吸入轨迹
+            if (uCondense > 0.001) {
+              float swirlIn = uCondense * (1.0 - uCondense) * 3.8;
+              vec3 midPos = mix(posTree, posCondense, uCondense);
+              finalPos = rotateY(midPos, swirlIn);
+            }
+
+            // 向爆炸态过渡时平滑向外散射
+            if (uExplode > 0.001) {
+              finalPos = mix(finalPos, posExplode, uExplode);
+            }
+
+            // 5. 粒子闪烁与呼吸大小计算
+            float breatheSpeed = (aType > 1.5 && aType < 2.5) ? 2.6 : (aType > 0.5 && aType < 1.5 ? 3.2 : 1.8);
+            float twinkle = 0.68 + 0.32 * sin(uTime * breatheSpeed + aPhase * 3.0);
+
+            // 顶部五角星额外呼吸光晕增强
+            float starBoost = (aType > 1.5 && aType < 2.5) ? (1.0 + 0.18 * sin(uTime * 2.4)) : 1.0;
+
+            // 凝聚时能量增亮，爆炸时星尘细腻闪烁
+            vec3 col = aColor;
+            vec3 coreHotColor = mix(vec3(1.0, 0.45, 0.82), vec3(1.0, 0.92, 0.65), aSeed);
+            col = mix(col, coreHotColor * 1.28, uCondense * 0.65);
+            col = mix(col, col * 1.15, uExplode * 0.4);
+
+            vColor = col;
+            vType = aType;
+            vSparkle = twinkle;
+            vAlpha = (0.78 + 0.22 * twinkle) * (1.0 - uExplode * 0.14);
+
+            vec4 mvPosition = modelViewMatrix * vec4(finalPos, 1.0);
+            gl_Position = projectionMatrix * mvPosition;
+
+            float dynamicSize = aSize * starBoost * (0.88 + 0.22 * twinkle);
+            dynamicSize *= (1.0 + uCondense * 0.25 + uExplode * 0.18);
+            gl_PointSize = dynamicSize * uPixelRatio * (34.0 / -mvPosition.z);
+          }
+        `,
+        fragmentShader: `
+          varying vec3 vColor;
+          varying float vAlpha;
+          varying float vType;
+          varying float vSparkle;
+
+          void main() {
+            vec2 uv = gl_PointCoord - 0.5;
+            float dist = length(uv);
+            if (dist > 0.5) discard;
+
+            // 柔和的径向发光核心 + 梦幻外晕
+            float core = exp(-dist * dist * 26.0);
+            float halo = pow(max(0.0, 1.0 - dist * 2.0), 2.4) * 0.65;
+
+            // 金色装饰与顶部五角星带有细腻的十字星芒
+            float flare = 0.0;
+            if (vType > 0.5 && vType < 2.5) {
+              float crossX = exp(-abs(uv.y) * 26.0) * exp(-abs(uv.x) * 6.0);
+              float crossY = exp(-abs(uv.x) * 26.0) * exp(-abs(uv.y) * 6.0);
+              flare = (crossX + crossY) * 0.45 * vSparkle;
+            }
+
+            float intensity = core + halo + flare;
+            // 核心偏白高光，外围保留高级粉金色调
+            vec3 finalCol = mix(vColor, vec3(1.0, 0.98, 1.0), core * 0.62);
+
+            gl_FragColor = vec4(finalCol, clamp(intensity * vAlpha, 0.0, 1.0));
+          }
+        `,
+        transparent: true,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending
+      });
+
+      mainParticleSystem = new THREE.Points(geometry, mainMaterial);
+      scene.add(mainParticleSystem);
+    }
+
+    /**
+     * ============================================================================
+     * 4. MediaPipe Hands 单手手势识别与开合度计算
+     * ============================================================================
+     */
+
+    // 手部骨骼连线拓扑
+    const HAND_CONNECTIONS = [
+      [0, 1], [1, 2], [2, 3], [3, 4],       // 大拇指
+      [0, 5], [5, 6], [6, 7], [7, 8],       // 食指
+      [5, 9], [9, 10], [10, 11], [11, 12],  // 中指
+      [9, 13], [13, 14], [14, 15], [15, 16],// 无名指
+      [13, 17], [17, 18], [18, 19], [19, 20], // 小指
+      [0, 17]                               // 掌底
+    ];
+
+    /**
+     * 计算五指指尖到手掌中心的归一化平均距离 -> 映射到 [0.0 ~ 1.0]
+     */
+    function computePalmOpenness(landmarks) {
+      // 手掌中心：取手腕(0)与四指掌根(5, 9, 13, 17)的平均坐标
+      const palmIndices = [0, 5, 9, 13, 17];
+      let cx = 0, cy = 0, cz = 0;
+      for (const idx of palmIndices) {
+        cx += landmarks[idx].x;
+        cy += landmarks[idx].y;
+        cz += landmarks[idx].z;
+      }
+      cx /= palmIndices.length;
+      cy /= palmIndices.length;
+      cz /= palmIndices.length;
+
+      // 归一化基准尺度：手腕(0)到中指根部(9)的欧氏距离（消除手部远近影响）
+      const wrist = landmarks[0];
+      const middleMcp = landmarks[9];
+      const palmScale = Math.hypot(
+        middleMcp.x - wrist.x,
+        middleMcp.y - wrist.y,
+        (middleMcp.z - wrist.z) * 0.5
+      );
+
+      if (palmScale < 0.001) return 0.5;
+
+      // 五指指尖索引：4(拇指), 8(食指), 12(中指), 16(无名指), 20(小指)
+      const tipIndices = [4, 8, 12, 16, 20];
+      let sumDist = 0;
+      for (const idx of tipIndices) {
+        const lm = landmarks[idx];
+        const d = Math.hypot(lm.x - cx, lm.y - cy, (lm.z - cz) * 0.5);
+        sumDist += d;
+      }
+
+      const avgNormalizedDist = (sumDist / tipIndices.length) / palmScale;
+
+      // 经验校准：握紧拳头约 0.85~1.0，自然放松约 1.45，完全张开约 1.95~2.15
+      const minRatio = 0.92;
+      const maxRatio = 2.02;
+      const normalized = (avgNormalizedDist - minRatio) / (maxRatio - minRatio);
+      return Math.max(0, Math.min(1, normalized));
+    }
+
+    /**
+     * 绘制右下角摄像头画面与精致的粉金手部骨骼关键点
+     */
+    function drawHandPreview(videoEl, landmarks) {
+      const canvas = dom.handCanvas;
+      const ctx = canvas.getContext('2d');
+      const w = canvas.width;
+      const h = canvas.height;
+
+      ctx.clearRect(0, 0, w, h);
+
+      // 绘制实时视频帧（略微压暗以凸显发光骨骼线）
+      ctx.save();
+      ctx.globalAlpha = 0.82;
+      ctx.drawImage(videoEl, 0, 0, w, h);
+      ctx.restore();
+
+      if (!landmarks) return;
+
+      // 绘制骨骼连线
+      ctx.save();
+      ctx.strokeStyle = 'rgba(255, 182, 193, 0.88)';
+      ctx.lineWidth = 2;
+      ctx.shadowColor = '#ff69b4';
+      ctx.shadowBlur = 8;
+
+      for (const [start, end] of HAND_CONNECTIONS) {
+        const p1 = landmarks[start];
+        const p2 = landmarks[end];
+        ctx.beginPath();
+        ctx.moveTo(p1.x * w, p1.y * h);
+        ctx.lineTo(p2.x * w, p2.y * h);
+        ctx.stroke();
+      }
+
+      // 绘制关键点（指尖使用金黄色高亮，其余使用亮粉色）
+      const tipSet = new Set([4, 8, 12, 16, 20]);
+      for (let i = 0; i < landmarks.length; i++) {
+        const lm = landmarks[i];
+        const isTip = tipSet.has(i);
+        ctx.beginPath();
+        ctx.arc(lm.x * w, lm.y * h, isTip ? 4.2 : 2.6, 0, Math.PI * 2);
+        ctx.fillStyle = isTip ? '#FFD700' : '#FF69B4';
+        ctx.shadowColor = isTip ? '#FFD700' : '#FF1493';
+        ctx.shadowBlur = isTip ? 10 : 6;
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+
+    /**
+     * MediaPipe Hands 识别结果回调
+     */
+    function onHandsResults(results) {
+      const hasHand = results.multiHandLandmarks && results.multiHandLandmarks.length > 0;
+      const landmarks = hasHand ? results.multiHandLandmarks[0] : null;
+
+      drawHandPreview(dom.video, landmarks);
+
+      if (hasHand) {
+        AppState.handDetected = true;
+        AppState.lastHandTime = performance.now();
+        AppState.isManualOverride = false;
+
+        const openness = computePalmOpenness(landmarks);
+        AppState.targetOpenness = openness;
+
+        dom.handDetectDot.className = 'w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_8px_#34d399]';
+        dom.handDetectText.textContent = '已捕捉单手手势';
+        dom.controlModeTag.textContent = '手势控制中';
+      } else {
+        AppState.handDetected = false;
+        dom.handDetectDot.className = 'w-2 h-2 rounded-full bg-amber-300/80';
+        dom.handDetectText.textContent = '未检测到手部';
+      }
+    }
+
+    /**
+     * 启动摄像头与 MediaPipe Hands
+     */
+    async function startCameraControl() {
+      if (AppState.cameraActive) {
+        stopCameraControl();
+        return;
+      }
+
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        showToast('当前浏览器不支持摄像头访问，请使用下方滑块或快捷按钮体验。');
+        return;
+      }
+
+      dom.cameraBtnText.textContent = '正在启动摄像头...';
+      dom.cameraBtn.disabled = true;
+
+      try {
+        mediaStream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            width: { ideal: 320 },
+            height: { ideal: 240 },
+            facingMode: 'user'
+          },
+          audio: false
+        });
+
+        dom.video.srcObject = mediaStream;
+        await dom.video.play();
+
+        dom.handCanvas.width = 320;
+        dom.handCanvas.height = 240;
+
+        // 惰性初始化 MediaPipe Hands
+        if (!handsInstance) {
+          if (typeof Hands === 'undefined') {
+            throw new Error('MediaPipe Hands 脚本未能加载');
+          }
+          handsInstance = new Hands({
+            locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+          });
+          handsInstance.setOptions({
+            maxNumHands: 1,
+            modelComplexity: 1,
+            minDetectionConfidence: 0.65,
+            minTrackingConfidence: 0.6
+          });
+          handsInstance.onResults(onHandsResults);
+        }
+
+        AppState.cameraActive = true;
+        AppState.isManualOverride = false;
+        dom.cameraPreviewBox.classList.remove('hidden');
+        dom.cameraBtnText.textContent = '关闭手势控制';
+        dom.controlModeTag.textContent = '手势待命';
+        showToast('手势控制已开启：握拳凝聚 · 自然圣诞树 · 张手爆炸');
+
+        processVideoLoop();
+      } catch (err) {
+        console.error('摄像头启动失败:', err);
+        stopCameraControl(true);
+        if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+          showToast('未获得摄像头权限，已优雅降级为手动滑块与快捷按钮控制。', 4200);
+        } else {
+          showToast('摄像头不可用或加载失败，您仍可通过手动滑块畅享粒子过渡。', 4200);
+        }
+      } finally {
+        dom.cameraBtn.disabled = false;
+      }
+    }
+
+    /**
+     * 持续送帧至 MediaPipe Hands 进行实时手势推理
+     */
+    async function processVideoLoop() {
+      if (!AppState.cameraActive) return;
+
+      if (dom.video.readyState >= 2 && handsInstance && !isProcessingFrame) {
+        isProcessingFrame = true;
+        try {
+          await handsInstance.send({ image: dom.video });
+        } catch (e) {
+          console.warn('手势帧处理异常:', e);
+        } finally {
+          isProcessingFrame = false;
+        }
+      }
+
+      if (AppState.cameraActive) {
+        requestAnimationFrame(processVideoLoop);
+      }
+    }
+
+    /**
+     * 关闭摄像头并释放资源
+     */
+    function stopCameraControl(silent = false) {
+      AppState.cameraActive = false;
+      AppState.handDetected = false;
+      isProcessingFrame = false;
+
+      if (mediaStream) {
+        mediaStream.getTracks().forEach((track) => track.stop());
+        mediaStream = null;
+      }
+
+      dom.video.srcObject = null;
+      dom.cameraPreviewBox.classList.add('hidden');
+      dom.cameraBtnText.textContent = '开启手势控制';
+      dom.controlModeTag.textContent = '手动模式';
+
+      if (!silent) {
+        showToast('已关闭摄像头，切换回手动控制模式');
+      }
+    }
+
+    /**
+     * ============================================================================
+     * 5. UI 交互绑定与状态实时同步
+     * ============================================================================
+     */
+    function initUI() {
+      dom.video = document.getElementById('input-video');
+      dom.handCanvas = document.getElementById('hand-canvas');
+      dom.cameraPreviewBox = document.getElementById('camera-preview-box');
+      dom.previewCanvasWrap = document.getElementById('preview-canvas-wrap');
+      dom.togglePreviewBtn = document.getElementById('toggle-preview-btn');
+      dom.handDetectDot = document.getElementById('hand-detect-dot');
+      dom.handDetectText = document.getElementById('hand-detect-text');
+
+      dom.hudBody = document.getElementById('hud-body');
+      dom.toggleHudBtn = document.getElementById('toggle-hud-btn');
+      dom.stateBadge = document.getElementById('state-badge');
+      dom.opennessValue = document.getElementById('openness-value');
+      dom.opennessBar = document.getElementById('openness-bar');
+      dom.cameraBtn = document.getElementById('camera-btn');
+      dom.cameraBtnText = document.getElementById('camera-btn-text');
+      dom.controlModeTag = document.getElementById('control-mode-tag');
+      dom.manualSlider = document.getElementById('manual-slider');
+
+      dom.btnCondense = document.getElementById('btn-condense');
+      dom.btnTree = document.getElementById('btn-tree');
+      dom.btnExplode = document.getElementById('btn-explode');
+
+      dom.toastBox = document.getElementById('toast-box');
+      dom.toastContent = document.getElementById('toast-content');
+
+      // 摄像头开关
+      dom.cameraBtn.addEventListener('click', startCameraControl);
+
+      // 折叠/展开左上角控制面板
+      dom.toggleHudBtn.addEventListener('click', () => {
+        AppState.hudCollapsed = !AppState.hudCollapsed;
+        dom.hudBody.classList.toggle('hidden', AppState.hudCollapsed);
+        dom.toggleHudBtn.textContent = AppState.hudCollapsed ? '展开' : '收起';
+      });
+
+      // 折叠/展开右下角摄像头预览画面
+      dom.togglePreviewBtn.addEventListener('click', () => {
+        AppState.previewCollapsed = !AppState.previewCollapsed;
+        dom.previewCanvasWrap.classList.toggle('hidden', AppState.previewCollapsed);
+        dom.togglePreviewBtn.textContent = AppState.previewCollapsed ? '显示画面' : '隐藏画面';
+      });
+
+      // 手动滑块模拟手掌开合度
+      dom.manualSlider.addEventListener('input', (e) => {
+        const val = parseFloat(e.target.value) / 100;
+        AppState.isManualOverride = true;
+        AppState.targetOpenness = val;
+        dom.controlModeTag.textContent = '手动模拟';
+      });
+
+      // 快捷状态按钮
+      dom.btnCondense.addEventListener('click', () => setQuickState(0.0));
+      dom.btnTree.addEventListener('click', () => setQuickState(0.5));
+      dom.btnExplode.addEventListener('click', () => setQuickState(1.0));
+    }
+
+    function setQuickState(targetValue) {
+      AppState.isManualOverride = true;
+      AppState.targetOpenness = targetValue;
+      dom.manualSlider.value = (targetValue * 100).toFixed(1);
+      dom.controlModeTag.textContent = '手动模拟';
+    }
+
+    /**
+     * 更新左上角状态徽章、进度条与按钮高亮
+     */
+    function updateHUD(openness) {
+      const pct = Math.round(openness * 100);
+      dom.opennessValue.textContent = `${pct}%`;
+      dom.opennessBar.style.width = `${pct}%`;
+
+      // 当手势控制生效时，同步滑块位置以便直观查看
+      if (AppState.cameraActive && !AppState.isManualOverride) {
+        dom.manualSlider.value = (openness * 100).toFixed(1);
+      }
+
+      dom.btnCondense.classList.remove('state-btn-active');
+      dom.btnTree.classList.remove('state-btn-active');
+      dom.btnExplode.classList.remove('state-btn-active');
+
+      if (openness < 0.32) {
+        dom.stateBadge.textContent = '凝聚 · 高能核心';
+        dom.stateBadge.className =
+          'px-2.5 py-0.5 rounded-full text-xs font-medium bg-fuchsia-500/25 text-fuchsia-200 border border-fuchsia-300/40 transition-all duration-300';
+        dom.btnCondense.classList.add('state-btn-active');
+      } else if (openness > 0.68) {
+        dom.stateBadge.textContent = '爆炸 · 星尘发散';
+        dom.stateBadge.className =
+          'px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-400/20 text-amber-200 border border-amber-300/40 transition-all duration-300';
+        dom.btnExplode.classList.add('state-btn-active');
+      } else {
+        dom.stateBadge.textContent = '圣诞树 · 梦幻形态';
+        dom.stateBadge.className =
+          'px-2.5 py-0.5 rounded-full text-xs font-medium bg-pink-500/20 text-pink-200 border border-pink-300/35 transition-all duration-300';
+        dom.btnTree.classList.add('state-btn-active');
+      }
+    }
+
+    /**
+     * ============================================================================
+     * 6. 响应式窗口适配与 60FPS 主渲染循环
+     * ============================================================================
+     */
+    function onWindowResize() {
+      const width = window.innerWidth;
+      const height = window.innerHeight;
+      const dpr = Math.min(window.devicePixelRatio, 2);
+
+      camera.aspect = width / height;
+      camera.updateProjectionMatrix();
+      renderer.setPixelRatio(dpr);
+      renderer.setSize(width, height);
+
+      if (mainMaterial) mainMaterial.uniforms.uPixelRatio.value = dpr;
+      if (bgStarMaterial) bgStarMaterial.uniforms.uPixelRatio.value = dpr;
+    }
+
+    function animate() {
+      requestAnimationFrame(animate);
+
+      const delta = Math.min(clock.getDelta(), 0.05);
+      const elapsed = clock.getElapsedTime();
+
+      // 若摄像头已开启但超过 0.7 秒未检测到手部，平滑回归默认圣诞树形态 (0.5)
+      if (
+        AppState.cameraActive &&
+        !AppState.handDetected &&
+        !AppState.isManualOverride &&
+        performance.now() - AppState.lastHandTime > 700
+      ) {
+        AppState.targetOpenness = 0.5;
+      }
+
+      // 平滑阻尼插值（指数衰减 lerp，帧率无关，丝滑无抖动）
+      const lerpAlpha = 1.0 - Math.exp(-delta * 5.2);
+      AppState.currentOpenness += (AppState.targetOpenness - AppState.currentOpenness) * lerpAlpha;
+
+      // 将开合度 [0 ~ 1] 映射为凝聚权重与爆炸权重，确保三态过渡连续丝滑
+      let condenseWeight = 0.0;
+      let explodeWeight = 0.0;
+
+      if (AppState.currentOpenness < 0.5) {
+        const t = (0.5 - AppState.currentOpenness) / 0.5; // 0 -> 1
+        condenseWeight = Math.pow(t, 1.35);
+      } else {
+        const t = (AppState.currentOpenness - 0.5) / 0.5; // 0 -> 1
+        explodeWeight = Math.pow(t, 1.25);
+      }
+
+      // 更新主粒子着色器 uniforms
+      if (mainMaterial) {
+        mainMaterial.uniforms.uTime.value = elapsed;
+        mainMaterial.uniforms.uCondense.value = condenseWeight;
+        mainMaterial.uniforms.uExplode.value = explodeWeight;
+      }
+
+      // 圣诞树缓慢优雅自转（凝聚时微加速，爆炸时更悠然漂浮）
+      if (mainParticleSystem) {
+        const rotSpeed = 0.16 + condenseWeight * 0.28 - explodeWeight * 0.06;
+        mainParticleSystem.rotation.y += delta * rotSpeed;
+      }
+
+       // 远景星空与星云极缓慢旋转，增添宇宙纵深感
+      if (bgStarMaterial) {
+        bgStarMaterial.uniforms.uTime.value = elapsed;
+      }
+      if (bgStarSystem) {
+        bgStarSystem.rotation.y = elapsed * 0.012;
+      }
+      if (nebulaSystem) {
+        nebulaSystem.rotation.y = -elapsed * 0.008;
+      }
+
+      // 实时刷新中文 UI 指示
+      updateHUD(AppState.currentOpenness);
+
+      controls.update();
+      renderer.render(scene, camera);
+    }
+
+    // 页面加载完成后启动系统
+    window.onload = function () {
+      initUI();
+      initThree();
+      animate();
+    };
+  </script>
+</body>
+</html>
